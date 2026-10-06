@@ -170,6 +170,16 @@ sudo rm /etc/systemd/system/acer_wmi.service
 sudo systemctl daemon-reload
 ```
 
+## Crédits
+
+Ce module s'inspire du travail de **Jafar Akhondali** et de son projet
+[acer-predator-turbo-and-rgb-keyboard-linux-module](https://github.com/JafarAkhondali/acer-predator-turbo-and-rgb-keyboard-linux-module),
+qui a introduit les interfaces `/dev/acer-gkbbl` et `/dev/acer-gkbbl-static`
+pour le rétroéclairage RGB et le mode turbo des portables Acer Predator, Helios et Nitro.
+
+Il repose sur le pilote `acer-wmi` du noyau Linux, écrit par Carlos Corbacho
+et maintenu par la communauté.
+
 ## Licence
 
 GPL-2.0-or-later, comme le pilote `acer-wmi` d'origine (Carlos Corbacho et contributeurs).
