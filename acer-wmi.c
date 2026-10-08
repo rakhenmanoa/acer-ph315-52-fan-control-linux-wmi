@@ -435,14 +435,20 @@ static int acer_battery_get_temp(long *millideg)
 		return -EIO;
 
 	obj = output.pointer;
-	if (obj && obj->type == ACPI_TYPE_BUFFER && obj->buffer.length == sizeof(u32)) {
+	if (!obj) {
+		ret = -ENODATA;
+	} else if (obj->type != ACPI_TYPE_BUFFER || obj->buffer.length != sizeof(u32)) {
+		pr_info_once("Température batterie : réponse inattendue (type %u, %u octets)\n",
+			 obj->type, obj->type == ACPI_TYPE_BUFFER ? obj->buffer.length : 0);
+		ret = -EPROTO;
+	} else {
 		v = get_unaligned_le32(obj->buffer.pointer);
 		/* 0 ou valeur hors plage : pas de batterie ou lecture invalide */
 		if (v && v <= U16_MAX) {
 			*millideg = ((long)v - 2731) * 100;
 			ret = 0;
 		} else {
-			ret = -ENXIO;
+			ret = -ENODATA;
 		}
 	}
 	kfree(obj);
@@ -3692,10 +3698,19 @@ static int acer_wmi_hwmon_init(void)
 	if (!supported_sensors)
 		return 0;
 
+	/*
+	 * Le capteur est affiché dès que l'interface existe : une lecture
+	 * qui échoue renvoie une erreur (« N/A » dans sensors) au lieu de
+	 * masquer le capteur pour toute la session.
+	 */
 	if (wmi_has_guid(ACER_BATTERY_GUID)) {
 		long t;
+		int err;
 
-		battery_temp_supported = !acer_battery_get_temp(&t);
+		battery_temp_supported = true;
+		err = acer_battery_get_temp(&t);
+		if (err)
+			pr_info("Température batterie : première lecture en échec (%d)\n", err);
 	}
 
 	hwmon = devm_hwmon_device_register_with_info(dev, "acer",
