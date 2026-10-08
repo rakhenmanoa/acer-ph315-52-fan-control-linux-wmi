@@ -40,6 +40,11 @@
 #include <linux/cdev.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
+#include <linux/seq_file.h>
+#if IS_REACHABLE(CONFIG_LEDS_CLASS_MULTICOLOR)
+#include <linux/led-class-multicolor.h>
+#define ACER_HAVE_ZONE_LEDS 1
+#endif
 
 MODULE_AUTHOR("Carlos Corbacho");
 MODULE_DESCRIPTION("Acer Laptop WMI Extras Driver");
@@ -207,6 +212,13 @@ static u8 gkbbl_state[GAMING_KBBL_CONFIG_LEN] = {
 };
 static DEFINE_MUTEX(gkbbl_lock);
 static bool gkbbl_led_inited;
+static bool gkbbl_state_set;	/* une configuration a été envoyée depuis le chargement */
+
+/* Couleurs statiques mémorisées par zone (reprise après veille, LED par zone) */
+#define GKBBL_NUM_ZONES		4
+static u8 gkbbl_zone_rgb[GKBBL_NUM_ZONES][3];
+static bool gkbbl_zone_set[GKBBL_NUM_ZONES];
+static struct dentry *gkbbl_debugfs;
 
 /* Prototypes indispensables pour l'enregistrement */
 static int acer_gkbbl_open(struct inode *inode, struct file *file);
@@ -410,6 +422,16 @@ MODULE_PARM_DESC(cycle_gaming_thermal_profile,
 MODULE_PARM_DESC(predator_v4,
 	"Enable features for predator laptops that use predator sense v4");
 
+static bool enable_platform_profile;
+module_param(enable_platform_profile, bool, 0444);
+MODULE_PARM_DESC(enable_platform_profile,
+	"Force the platform profile on models where it is disabled (PH315-52)");
+
+static bool kbd_fw_sync;
+module_param(kbd_fw_sync, bool, 0644);
+MODULE_PARM_DESC(kbd_fw_sync,
+	"Read keyboard backlight brightness back from the firmware (experimental)");
+
 struct acer_data {
 	int mailled;
 	int threeg;
@@ -460,6 +482,7 @@ struct quirk_entry {
 	u8 gpu_fans;
 	u8 predator_v4;
 	u8 pwm;
+	u8 no_platform_profile;	/* le profil énergétique perturbe ce modèle */
 };
 
 static struct quirk_entry *quirks;
@@ -476,9 +499,15 @@ static void __init set_quirks(void)
 		interface->capability |= ACER_CAP_TURBO_OC | ACER_CAP_TURBO_LED
 					 | ACER_CAP_TURBO_FAN;
 
-	if (quirks->predator_v4)
-		interface->capability |= ACER_CAP_PLATFORM_PROFILE |
-					 ACER_CAP_HWMON;
+	if (quirks->predator_v4) {
+		interface->capability |= ACER_CAP_HWMON;
+		/*
+		 * Sur le PH315-52, le profil énergétique Predator v4 entre en conflit
+		 * avec la gestion d'énergie du bureau : il n'est activé que sur demande.
+		 */
+		if (!quirks->no_platform_profile || enable_platform_profile)
+			interface->capability |= ACER_CAP_PLATFORM_PROFILE;
+	}
 
 	if (quirks->pwm)
 		interface->capability |= ACER_CAP_PWM;
@@ -520,6 +549,7 @@ static struct quirk_entry quirk_acer_predator_ph315_52 = {
 	.cpu_fans = 1,
 	.gpu_fans = 1,
 	.predator_v4 = 1,
+	.no_platform_profile = 1,
 	.brightness = 1,
 	.pwm = 1,
 };
@@ -1071,10 +1101,21 @@ static ssize_t acer_gkbbl_write(struct file *file, const char __user *buf, size_
 					ACER_WMID_SET_GAMINGKBBL_METHODID,
 					kernel_buf, config_len);
 
-	/* Mémorise la configuration pour que la LED kbd_backlight la réutilise */
+	/* Mémorise la configuration (LED, reprise après veille) */
 	if (ACPI_SUCCESS(status) && !dev->is_static) {
 		memcpy(gkbbl_state, kernel_buf, GAMING_KBBL_CONFIG_LEN);
 		gkbbl_state[GKBBL_APPLY_IDX] = 1;
+		gkbbl_state_set = true;
+	} else if (ACPI_SUCCESS(status)) {
+		int z;
+
+		/* Octet 0 : masque des zones, octets 1 à 3 : couleur */
+		for (z = 0; z < GKBBL_NUM_ZONES; z++) {
+			if (!(kernel_buf[0] & BIT(z)))
+				continue;
+			memcpy(gkbbl_zone_rgb[z], &kernel_buf[1], 3);
+			gkbbl_zone_set[z] = true;
+		}
 	}
 
 	mutex_unlock(&gkbbl_lock);
@@ -1097,7 +1138,7 @@ static int acer_gkbbl_uevent(const struct device *dev, struct kobj_uevent_env *e
  * Active les 4 zones du clavier RGB. Sans ces appels, certains firmwares
  * (Predator / Nitro à 4 zones) n'appliquent pas tous les effets.
  */
-static void __init acer_gkbbl_enable_zones(void)
+static void acer_gkbbl_enable_zones(void)
 {
 	u64 gaming_sysinfo;
 
@@ -1173,6 +1214,69 @@ unregister_region:
 }
 
 /*
+ * Lit l'état du clavier renvoyé par le BIOS (méthode 21), octets bruts.
+ * Le format n'est pas documenté : voir le fichier debugfs acer-gkbbl/fw_state.
+ */
+static int acer_gkbbl_fw_read(u8 *out, size_t len, u32 *type)
+{
+	u32 in = 0;
+	struct acpi_buffer input = { sizeof(in), &in };
+	struct acpi_buffer output = { ACPI_ALLOCATE_BUFFER, NULL };
+	union acpi_object *obj;
+	acpi_status status;
+	int n = -ENOMSG;
+
+	status = wmi_evaluate_method(WMID_GUID4, 0, ACER_WMID_GET_GAMINGKBBL_METHODID,
+				     &input, &output);
+	if (ACPI_FAILURE(status))
+		return -EIO;
+
+	obj = output.pointer;
+	if (obj) {
+		*type = obj->type;
+		if (obj->type == ACPI_TYPE_BUFFER) {
+			n = min_t(size_t, obj->buffer.length, len);
+			memcpy(out, obj->buffer.pointer, n);
+		} else if (obj->type == ACPI_TYPE_INTEGER) {
+			u64 v = obj->integer.value;
+
+			n = min_t(size_t, sizeof(v), len);
+			memcpy(out, &v, n);
+		}
+	}
+	kfree(output.pointer);
+	return n;
+}
+
+/*
+ * Avec kbd_fw_sync=1, reprend la luminosité indiquée par le BIOS
+ * (octet 2, comme en écriture). Renvoie true si elle a changé.
+ */
+static bool acer_gkbbl_fw_sync(void)
+{
+	u8 buf[GAMING_KBBL_CONFIG_LEN];
+	u32 type = 0;
+	bool changed = false;
+	int n;
+
+	if (!kbd_fw_sync)
+		return false;
+
+	n = acer_gkbbl_fw_read(buf, sizeof(buf), &type);
+	if (n <= GKBBL_BRIGHTNESS_IDX || buf[GKBBL_BRIGHTNESS_IDX] > GKBBL_MAX_BRIGHTNESS)
+		return false;
+
+	mutex_lock(&gkbbl_lock);
+	if (gkbbl_state[GKBBL_BRIGHTNESS_IDX] != buf[GKBBL_BRIGHTNESS_IDX]) {
+		gkbbl_state[GKBBL_BRIGHTNESS_IDX] = buf[GKBBL_BRIGHTNESS_IDX];
+		changed = true;
+	}
+	mutex_unlock(&gkbbl_lock);
+
+	return changed;
+}
+
+/*
  * LED « acer::kbd_backlight » : interface standard utilisée par UPower,
  * donc par le curseur de luminosité clavier de KDE et GNOME.
  * Seule la luminosité change ; mode, vitesse et couleurs sont conservés.
@@ -1184,6 +1288,7 @@ static int acer_kbd_led_set(struct led_classdev *cdev, enum led_brightness value
 	mutex_lock(&gkbbl_lock);
 	gkbbl_state[GKBBL_BRIGHTNESS_IDX] = value;
 	gkbbl_state[GKBBL_APPLY_IDX] = 1;
+	gkbbl_state_set = true;
 	status = WMI_gaming_execute_buf(ACER_WMID_SET_GAMINGKBBL_METHODID,
 					gkbbl_state, GAMING_KBBL_CONFIG_LEN);
 	mutex_unlock(&gkbbl_lock);
@@ -1193,6 +1298,7 @@ static int acer_kbd_led_set(struct led_classdev *cdev, enum led_brightness value
 
 static enum led_brightness acer_kbd_led_get(struct led_classdev *cdev)
 {
+	acer_gkbbl_fw_sync();
 	return gkbbl_state[GKBBL_BRIGHTNESS_IDX];
 }
 
@@ -1201,7 +1307,167 @@ static struct led_classdev acer_kbd_led = {
 	.max_brightness = GKBBL_MAX_BRIGHTNESS,
 	.brightness_set_blocking = acer_kbd_led_set,
 	.brightness_get = acer_kbd_led_get,
+	.flags = LED_BRIGHT_HW_CHANGED,
 };
+
+/* Appelé à chaque événement WMI : signale à UPower un changement fait par Fn */
+static void acer_kbd_led_fw_event(void)
+{
+	if (gkbbl_led_inited && acer_gkbbl_fw_sync())
+		led_classdev_notify_brightness_hw_changed(&acer_kbd_led,
+				gkbbl_state[GKBBL_BRIGHTNESS_IDX]);
+}
+
+#ifdef ACER_HAVE_ZONE_LEDS
+/*
+ * Une LED multicolore par zone : /sys/class/leds/acer:rgb:kbd_zone-N
+ * (multi_intensity = « R V B », brightness = 0-255). Régler une zone passe
+ * le clavier en mode statique, comme le fait facer_rgb.py.
+ */
+struct acer_zone_led {
+	struct led_classdev_mc mc;
+	struct mc_subled subled[3];
+	char name[32];
+	int zone;
+};
+
+static struct acer_zone_led acer_zone_leds[GKBBL_NUM_ZONES];
+static int acer_zone_leds_registered;
+
+static int acer_zone_led_set(struct led_classdev *cdev, enum led_brightness value)
+{
+	struct led_classdev_mc *mc = lcdev_to_mccdev(cdev);
+	struct acer_zone_led *zl = container_of(mc, struct acer_zone_led, mc);
+	u8 zbuf[GAMING_KBBL_STATIC_CONFIG_LEN];
+	u8 st[GAMING_KBBL_CONFIG_LEN] = { 0 };
+	acpi_status status;
+	int i;
+
+	led_mc_calc_color_components(mc, value);
+	zbuf[0] = BIT(zl->zone);
+	for (i = 0; i < 3; i++)
+		zbuf[i + 1] = mc->subled_info[i].brightness;
+
+	mutex_lock(&gkbbl_lock);
+	status = WMI_gaming_execute_buf(ACER_WMID_SET_GAMING_STATIC_LED_METHODID,
+					zbuf, sizeof(zbuf));
+	if (ACPI_SUCCESS(status)) {
+		memcpy(gkbbl_zone_rgb[zl->zone], &zbuf[1], 3);
+		gkbbl_zone_set[zl->zone] = true;
+
+		/* Mode statique, luminosité globale inchangée */
+		st[GKBBL_BRIGHTNESS_IDX] = gkbbl_state[GKBBL_BRIGHTNESS_IDX];
+		st[GKBBL_APPLY_IDX] = 1;
+		status = WMI_gaming_execute_buf(ACER_WMID_SET_GAMINGKBBL_METHODID,
+						st, sizeof(st));
+		if (ACPI_SUCCESS(status)) {
+			memcpy(gkbbl_state, st, sizeof(st));
+			gkbbl_state_set = true;
+		}
+	}
+	mutex_unlock(&gkbbl_lock);
+
+	return ACPI_FAILURE(status) ? -EIO : 0;
+}
+
+static void acer_zone_leds_exit(void)
+{
+	while (acer_zone_leds_registered > 0)
+		led_classdev_multicolor_unregister(
+			&acer_zone_leds[--acer_zone_leds_registered].mc);
+}
+
+static int acer_zone_leds_init(struct device *parent)
+{
+	static const unsigned int colors[3] = {
+		LED_COLOR_ID_RED, LED_COLOR_ID_GREEN, LED_COLOR_ID_BLUE
+	};
+	int z, i, err;
+
+	for (z = 0; z < GKBBL_NUM_ZONES; z++) {
+		struct acer_zone_led *zl = &acer_zone_leds[z];
+
+		zl->zone = z;
+		snprintf(zl->name, sizeof(zl->name), "acer:rgb:kbd_zone-%d", z + 1);
+		for (i = 0; i < 3; i++) {
+			zl->subled[i].color_index = colors[i];
+			zl->subled[i].channel = i;
+			zl->subled[i].intensity = 255;
+		}
+		zl->mc.subled_info = zl->subled;
+		zl->mc.num_colors = 3;
+		zl->mc.led_cdev.name = zl->name;
+		zl->mc.led_cdev.max_brightness = 255;
+		zl->mc.led_cdev.brightness = 255;
+		zl->mc.led_cdev.brightness_set_blocking = acer_zone_led_set;
+
+		err = led_classdev_multicolor_register(parent, &zl->mc);
+		if (err) {
+			acer_zone_leds_exit();
+			return err;
+		}
+		acer_zone_leds_registered++;
+	}
+	return 0;
+}
+#else
+static int acer_zone_leds_init(struct device *parent) { return 0; }
+static void acer_zone_leds_exit(void) { }
+#endif
+
+/* Réapplique couleurs et effet après la veille (le firmware peut les perdre) */
+static void acer_gkbbl_restore(void)
+{
+	bool any = false;
+	int z;
+
+	if (!gkbbl_inited)
+		return;
+
+	acer_gkbbl_enable_zones();
+
+	mutex_lock(&gkbbl_lock);
+	for (z = 0; z < GKBBL_NUM_ZONES; z++) {
+		u8 zbuf[GAMING_KBBL_STATIC_CONFIG_LEN];
+
+		if (!gkbbl_zone_set[z])
+			continue;
+		zbuf[0] = BIT(z);
+		memcpy(&zbuf[1], gkbbl_zone_rgb[z], 3);
+		WMI_gaming_execute_buf(ACER_WMID_SET_GAMING_STATIC_LED_METHODID,
+				       zbuf, sizeof(zbuf));
+		any = true;
+	}
+	if (any || gkbbl_state_set)
+		WMI_gaming_execute_buf(ACER_WMID_SET_GAMINGKBBL_METHODID,
+				       gkbbl_state, GAMING_KBBL_CONFIG_LEN);
+	mutex_unlock(&gkbbl_lock);
+}
+
+/* debugfs acer-gkbbl/fw_state : réponse brute du BIOS et configuration en cache */
+static int acer_gkbbl_fw_state_show(struct seq_file *m, void *unused)
+{
+	u8 buf[32];
+	u32 type = 0;
+	int n, i;
+
+	n = acer_gkbbl_fw_read(buf, sizeof(buf), &type);
+	if (n < 0) {
+		seq_printf(m, "BIOS : erreur %d\n", n);
+	} else {
+		seq_printf(m, "BIOS : type %u, %d octets :", type, n);
+		for (i = 0; i < n; i++)
+			seq_printf(m, " %02x", buf[i]);
+		seq_putc(m, '\n');
+	}
+
+	seq_puts(m, "cache :");
+	for (i = 0; i < GAMING_KBBL_CONFIG_LEN; i++)
+		seq_printf(m, " %02x", gkbbl_state[i]);
+	seq_putc(m, '\n');
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(acer_gkbbl_fw_state);
 
 static void acer_gkbbl_exit(void)
 {
@@ -1905,6 +2171,12 @@ static int WMI_gaming_execute_u32_u64(u32 method_id, u32 in, u64 *out)
 		return -EIO;
 
 	obj = result.pointer;
+	/*
+	 * Certains BIOS (PH315-52) ne renvoient rien pour ces méthodes : on ne
+	 * renvoie pas d'erreur, mais la sortie ne doit pas rester indéfinie.
+	 */
+	if (!obj && out)
+		*out = 0;
 	if (obj && out) {
 		switch (obj->type) {
 		case ACPI_TYPE_INTEGER:
@@ -2516,14 +2788,14 @@ static const struct platform_profile_ops acer_predator_v4_platform_profile_ops =
 
 static int acer_platform_profile_setup(struct platform_device *device)
 {
-	// if (quirks->predator_v4) {
-	// 	platform_profile_device = devm_platform_profile_register(
-	// 		&device->dev, "acer-wmi", NULL, &acer_predator_v4_platform_profile_ops);
-	// 	if (IS_ERR(platform_profile_device))
-	// 		return PTR_ERR(platform_profile_device);
- //
-	// 	platform_profile_support = true;
-	// }
+	if (quirks->predator_v4) {
+		platform_profile_device = devm_platform_profile_register(
+			&device->dev, "acer-wmi", NULL, &acer_predator_v4_platform_profile_ops);
+		if (IS_ERR(platform_profile_device))
+			return PTR_ERR(platform_profile_device);
+
+		platform_profile_support = true;
+	}
 	return 0;
 }
 
@@ -2814,6 +3086,9 @@ static void acer_wmi_notify(union acpi_object *obj, void *context)
 	}
 
 	return_value = *((struct event_return_value *)obj->buffer.pointer);
+
+	/* Les touches Fn de rétroéclairage peuvent avoir changé la luminosité */
+	acer_kbd_led_fw_event();
 
 	switch (return_value.function) {
 	case WMID_HOTKEY_EVENT:
@@ -3187,6 +3462,8 @@ static int acer_resume(struct device *dev)
 
 	if (acer_wmi_accel_dev)
 		acer_gsensor_init();
+
+	acer_gkbbl_restore();
 
 	return 0;
 }
@@ -3606,6 +3883,14 @@ static int __init acer_wmi_init(void)
 			pr_warn("Impossible d'enregistrer la LED kbd_backlight (%d)\n", err);
 		else
 			gkbbl_led_inited = true;
+
+		err = acer_zone_leds_init(&acer_platform_device->dev);
+		if (err)
+			pr_warn("Impossible d'enregistrer les LED par zone (%d)\n", err);
+
+		gkbbl_debugfs = debugfs_create_dir("acer-gkbbl", NULL);
+		debugfs_create_file("fw_state", 0400, gkbbl_debugfs, NULL,
+				    &acer_gkbbl_fw_state_fops);
 	}
 
 	return 0;
@@ -3625,6 +3910,8 @@ error_platform_register:
 
 static void __exit acer_wmi_exit(void)
 {
+	debugfs_remove_recursive(gkbbl_debugfs);
+	acer_zone_leds_exit();
 	if (gkbbl_led_inited)
 		led_classdev_unregister(&acer_kbd_led);
 

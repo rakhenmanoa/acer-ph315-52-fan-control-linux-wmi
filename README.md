@@ -12,9 +12,14 @@ Les noms des périphériques sont les mêmes que dans le module de Jafar Akhonda
 ses outils `facer_rgb.py` et `keyboard.py` fonctionnent tels quels.
 
 - LED `acer::kbd_backlight` : luminosité du clavier réglable depuis le curseur de KDE ou GNOME (via UPower)
+- LED `acer:rgb:kbd_zone-1` à `-4` : couleur de chaque zone via l'interface LED multicolore standard
+- Restauration de l'effet et des couleurs après une mise en veille
 - Quirks PH315-52 : mode turbo, ventilateurs CPU/GPU, capteurs hwmon et contrôle PWM
 
-L'enregistrement du *platform profile* est désactivé dans cette version.
+Le profil énergétique (*platform profile*) Predator v4 est désactivé sur le PH315-52 :
+il entre en conflit avec la gestion d'énergie de KDE, qui fonctionne mieux sans lui.
+Pour le réactiver à titre de test : `options acer_wmi enable_platform_profile=1`
+dans `/etc/modprobe.d/acer-wmi.conf`.
 
 ## Prérequis
 
@@ -188,6 +193,37 @@ Après le chargement du module, redémarrez UPower pour que KDE voie la LED :
 
 Les changements faits avec les touches Fn sont gérés par le firmware et ne
 remontent pas au curseur.
+
+## Couleur par zone (LED multicolores)
+
+Chaque zone du clavier (1 à 4, de gauche à droite) est une LED multicolore standard :
+
+```sh
+Z=/sys/class/leds/acer:rgb:kbd_zone-1
+echo 255 0 128 | sudo tee $Z/multi_intensity   # couleur R V B
+echo 255       | sudo tee $Z/brightness        # applique (0-255)
+```
+
+Régler une zone passe le clavier en mode statique. La luminosité générale
+reste celle de `acer::kbd_backlight`.
+
+Ces LED nécessitent `CONFIG_LEDS_CLASS_MULTICOLOR` (activé dans les noyaux Manjaro et Arch).
+
+## Synchronisation avec les touches Fn (expérimental)
+
+Par défaut, le curseur de KDE ne voit pas les changements faits avec Fn.
+Le paramètre `kbd_fw_sync` relit la luminosité auprès du BIOS :
+
+```sh
+echo 1 | sudo tee /sys/module/acer_wmi/parameters/kbd_fw_sync
+```
+
+Le format de la réponse du BIOS n'est pas encore vérifié sur le PH315-52.
+Pour l'examiner, changez la luminosité avec Fn puis lisez :
+
+```sh
+sudo cat /sys/kernel/debug/acer-gkbbl/fw_state
+```
 
 ## Contrôle des ventilateurs
 
