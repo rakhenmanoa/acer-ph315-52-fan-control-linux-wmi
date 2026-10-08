@@ -148,6 +148,7 @@ enum acer_wmi_event_ids {
 	WMID_ACCEL_OR_KBD_DOCK_EVENT = 0x5,
 	WMID_GAMING_TURBO_KEY_EVENT = 0x7,
 	WMID_AC_EVENT = 0x8,
+	WMID_BATTERY_EVENT = 0xB,
 };
 
 enum acer_wmi_predator_v4_sys_info_command {
@@ -405,6 +406,48 @@ static u8 commun_fn_key_number;
 static bool cycle_gaming_thermal_profile = true;
 static bool predator_v4;
 static u64 supported_sensors;
+
+/*
+ * Température de la batterie : interface « battery health » d'Acer
+ * (méthode 19, index 0x8 = Temperature de la Smart Battery Specification,
+ * en dixièmes de kelvin). Même appel que le module acer-wmi-battery.
+ */
+#define ACER_BATTERY_GUID		"79772EC5-04B1-4BFD-843C-61E7F77B6CC9"
+#define ACER_BATTERY_GET_INFO_METHODID	19
+#define ACER_BATTERY_INFO_TEMPERATURE	0x8
+#define ACER_BATTERY_INDEX		1
+#define ACER_HWMON_TEMP_BATTERY		3	/* canal temp4 */
+static bool battery_temp_supported;
+
+static int acer_battery_get_temp(long *millideg)
+{
+	u32 args[2] = { ACER_BATTERY_INFO_TEMPERATURE, ACER_BATTERY_INDEX };
+	struct acpi_buffer input = { sizeof(args), args };
+	struct acpi_buffer output = { ACPI_ALLOCATE_BUFFER, NULL };
+	union acpi_object *obj;
+	acpi_status status;
+	int ret = -EIO;
+	u32 v;
+
+	status = wmi_evaluate_method(ACER_BATTERY_GUID, 0, ACER_BATTERY_GET_INFO_METHODID,
+				     &input, &output);
+	if (ACPI_FAILURE(status))
+		return -EIO;
+
+	obj = output.pointer;
+	if (obj && obj->type == ACPI_TYPE_BUFFER && obj->buffer.length == sizeof(u32)) {
+		v = get_unaligned_le32(obj->buffer.pointer);
+		/* 0 ou valeur hors plage : pas de batterie ou lecture invalide */
+		if (v && v <= U16_MAX) {
+			*millideg = ((long)v - 2731) * 100;
+			ret = 0;
+		} else {
+			ret = -ENXIO;
+		}
+	}
+	kfree(obj);
+	return ret;
+}
 
 module_param(mailled, int, 0444);
 module_param(brightness, int, 0444);
@@ -3041,6 +3084,12 @@ static void acer_wmi_notify(union acpi_object *obj, void *context)
 	case WMID_AC_EVENT:
 		/* We ignore AC events here */
 		break;
+	case WMID_BATTERY_EVENT:
+		/*
+		 * Changement d'état de la batterie : le BIOS notifie déjà BAT0
+		 * (_Q08/_Q09 sur le PH315-52), rien à faire ici.
+		 */
+		break;
 	default:
 		pr_warn("Unknown function number - %d - %d\n",
 			return_value.function, return_value.key_num);
@@ -3443,6 +3492,8 @@ static umode_t acer_wmi_hwmon_is_visible(const void *data,
 
 	switch (type) {
 	case hwmon_temp:
+		if (channel == ACER_HWMON_TEMP_BATTERY)
+			return battery_temp_supported ? 0444 : 0;
 		sensor_id = acer_wmi_temp_channel_to_sensor_id[channel];
 		break;
 	case hwmon_pwm:
@@ -3479,6 +3530,9 @@ static int acer_wmi_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 
 	switch (type) {
 	case hwmon_temp:
+		if (channel == ACER_HWMON_TEMP_BATTERY)
+			return acer_battery_get_temp(val);
+
 		command |= FIELD_PREP(ACER_PREDATOR_V4_SENSOR_INDEX_BIT_MASK,
 				      acer_wmi_temp_channel_to_sensor_id[channel]);
 
@@ -3578,11 +3632,26 @@ static int acer_wmi_hwmon_write(struct device *dev, enum hwmon_sensor_types type
 	}
 }
 
+static const char *const acer_wmi_temp_labels[] = {
+	"CPU", "GPU", "External", "Battery",
+};
+
+static int acer_wmi_hwmon_read_string(struct device *dev, enum hwmon_sensor_types type,
+				      u32 attr, int channel, const char **str)
+{
+	if (type != hwmon_temp || attr != hwmon_temp_label)
+		return -EOPNOTSUPP;
+
+	*str = acer_wmi_temp_labels[channel];
+	return 0;
+}
+
 static const struct hwmon_channel_info *const acer_wmi_hwmon_info[] = {
 	HWMON_CHANNEL_INFO(temp,
-			   HWMON_T_INPUT,
-			   HWMON_T_INPUT,
-			   HWMON_T_INPUT
+			   HWMON_T_INPUT | HWMON_T_LABEL,
+			   HWMON_T_INPUT | HWMON_T_LABEL,
+			   HWMON_T_INPUT | HWMON_T_LABEL,
+			   HWMON_T_INPUT | HWMON_T_LABEL
 			   ),
 	HWMON_CHANNEL_INFO(fan,
 			   HWMON_F_INPUT,
@@ -3597,6 +3666,7 @@ static const struct hwmon_channel_info *const acer_wmi_hwmon_info[] = {
 
 static const struct hwmon_ops acer_wmi_hwmon_ops = {
 	.read = acer_wmi_hwmon_read,
+	.read_string = acer_wmi_hwmon_read_string,
 	.write = acer_wmi_hwmon_write,
 	.is_visible = acer_wmi_hwmon_is_visible,
 };
@@ -3621,6 +3691,12 @@ static int acer_wmi_hwmon_init(void)
 	supported_sensors = FIELD_GET(ACER_PREDATOR_V4_SUPPORTED_SENSORS_BIT_MASK, result);
 	if (!supported_sensors)
 		return 0;
+
+	if (wmi_has_guid(ACER_BATTERY_GUID)) {
+		long t;
+
+		battery_temp_supported = !acer_battery_get_temp(&t);
+	}
 
 	hwmon = devm_hwmon_device_register_with_info(dev, "acer",
 						     &supported_sensors,

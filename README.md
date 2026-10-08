@@ -13,6 +13,7 @@ Ajouts par rapport au pilote d'origine :
 - LED `acer::kbd_backlight` : luminosité du clavier réglable depuis le curseur de KDE ou GNOME (via UPower)
 - LED `acer:rgb:kbd_zone-1` à `-4` : couleur de chaque zone via l'interface LED multicolore standard
 - Restauration de l'effet et des couleurs après une mise en veille
+- Température de la batterie dans les capteurs (`sensors`, moniteur système de KDE)
 
 Les noms des périphériques sont les mêmes que dans le module de Jafar Akhondali :
 ses outils `facer_rgb.py` et `keyboard.py` fonctionnent tels quels.
@@ -122,20 +123,20 @@ make clean
 
 ## Option 2 : installation manuelle via DKMS
 
-C'est ce que fait `install.sh`. Remplacer `1.1.0` par le contenu du fichier `VERSION`.
+C'est ce que fait `install.sh`. Remplacer `1.2.0` par le contenu du fichier `VERSION`.
 
 ```sh
-sudo mkdir -p /usr/src/acer-ph315-52-fan-control-linux-wmi-1.1.0
-sudo cp acer-wmi.c Makefile VERSION dkms.conf /usr/src/acer-ph315-52-fan-control-linux-wmi-1.1.0/
-sudo dkms install acer-ph315-52-fan-control-linux-wmi/1.1.0
+sudo mkdir -p /usr/src/acer-ph315-52-fan-control-linux-wmi-1.2.0
+sudo cp acer-wmi.c Makefile VERSION dkms.conf /usr/src/acer-ph315-52-fan-control-linux-wmi-1.2.0/
+sudo dkms install acer-ph315-52-fan-control-linux-wmi/1.2.0
 sudo modprobe -r acer_wmi && sudo modprobe acer_wmi
 ```
 
 Désinstaller :
 
 ```sh
-sudo dkms remove acer-ph315-52-fan-control-linux-wmi/1.1.0 --all
-sudo rm -rf /usr/src/acer-ph315-52-fan-control-linux-wmi-1.1.0
+sudo dkms remove acer-ph315-52-fan-control-linux-wmi/1.2.0 --all
+sudo rm -rf /usr/src/acer-ph315-52-fan-control-linux-wmi-1.2.0
 ```
 
 ## Vérifier l'installation
@@ -256,6 +257,8 @@ Via hwmon, dans le dossier `/sys/class/hwmon/hwmonX/` dont le fichier `name` con
 | `pwm1`, `pwm2` | vitesse 0–255 en mode manuel |
 | `fan1_input`, `fan2_input` | vitesse mesurée (tr/min) |
 | `temp1_input` … `temp3_input` | CPU, GPU, capteur externe (millidegrés) |
+| `temp4_input` | batterie (millidegrés) |
+| `tempN_label` | nom de chaque capteur (`CPU`, `GPU`, `External`, `Battery`) |
 
 Exemple, ventilateur CPU à 50 % :
 
