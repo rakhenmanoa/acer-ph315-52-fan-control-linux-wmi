@@ -1275,14 +1275,20 @@ static int acer_zone_led_set(struct led_classdev *cdev, enum led_brightness valu
 		memcpy(gkbbl_zone_rgb[zl->zone], &zbuf[1], 3);
 		gkbbl_zone_set[zl->zone] = true;
 
-		/* Mode statique, luminosité globale inchangée */
-		st[GKBBL_BRIGHTNESS_IDX] = gkbbl_state[GKBBL_BRIGHTNESS_IDX];
-		st[GKBBL_APPLY_IDX] = 1;
-		status = WMI_gaming_execute_buf(ACER_WMID_SET_GAMINGKBBL_METHODID,
-						st, sizeof(st));
-		if (ACPI_SUCCESS(status)) {
-			memcpy(gkbbl_state, st, sizeof(st));
-			gkbbl_state_set = true;
+		/*
+		 * Passe en mode statique (luminosité globale inchangée), sauf si
+		 * c'est déjà le cas : un seul appel BIOS par changement de couleur,
+		 * ce qui rend les effets logiciels plus fluides.
+		 */
+		if (!gkbbl_state_set || gkbbl_state[0] != 0) {
+			st[GKBBL_BRIGHTNESS_IDX] = gkbbl_state[GKBBL_BRIGHTNESS_IDX];
+			st[GKBBL_APPLY_IDX] = 1;
+			status = WMI_gaming_execute_buf(ACER_WMID_SET_GAMINGKBBL_METHODID,
+							st, sizeof(st));
+			if (ACPI_SUCCESS(status)) {
+				memcpy(gkbbl_state, st, sizeof(st));
+				gkbbl_state_set = true;
+			}
 		}
 	}
 	mutex_unlock(&gkbbl_lock);

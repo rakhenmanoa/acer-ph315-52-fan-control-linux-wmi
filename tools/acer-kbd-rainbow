@@ -1,0 +1,40 @@
+#!/bin/sh
+# Effet logiciel : arc-en-ciel qui défile sur les 4 zones du clavier.
+# Utilise les LED acer:rgb:kbd_zone-1..4 du module.
+#
+# Usage : acer-kbd-rainbow [PAS] [INTERVALLE] [ÉCART] [LUMINOSITÉ]
+#   PAS        degrés de teinte ajoutés à chaque image (défaut 6)
+#   INTERVALLE secondes entre deux images (défaut 0.1)
+#   ÉCART      décalage de teinte entre deux zones en degrés (défaut 40)
+#   LUMINOSITÉ 0-255 (défaut 255)
+
+LEDS=${ACER_LEDS_DIR:-/sys/class/leds}
+STEP=${1:-6}; DELAY=${2:-0.1}; SPREAD=${3:-40}; BRIGHT=${4:-255}
+
+for z in 1 2 3 4; do
+	[ -w "$LEDS/acer:rgb:kbd_zone-$z/multi_intensity" ] || {
+		echo "Zone $z introuvable ou non accessible (lancer avec sudo)" >&2; exit 1; }
+	echo "$BRIGHT" > "$LEDS/acer:rgb:kbd_zone-$z/brightness"
+done
+
+# Teinte (0-359) -> « R V B », saturation et valeur maximales
+hue_rgb() {
+	h=$(( $1 % 360 )); f=$(( (h % 60) * 255 / 60 )); q=$(( 255 - f ))
+	case $(( h / 60 )) in
+		0) echo "255 $f 0" ;;
+		1) echo "$q 255 0" ;;
+		2) echo "0 255 $f" ;;
+		3) echo "0 $q 255" ;;
+		4) echo "$f 0 255" ;;
+		*) echo "255 0 $q" ;;
+	esac
+}
+
+hue=0
+while :; do
+	for z in 1 2 3 4; do
+		hue_rgb $(( hue + (z - 1) * SPREAD )) > "$LEDS/acer:rgb:kbd_zone-$z/multi_intensity"
+	done
+	hue=$(( (hue + STEP) % 360 ))
+	sleep "$DELAY"
+done

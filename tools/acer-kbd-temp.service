@@ -1,0 +1,11 @@
+[Unit]
+Description=Effet clavier Acer : couleur selon la température du processeur
+After=systemd-modules-load.service
+
+[Service]
+ExecStart=/usr/local/bin/acer-kbd-temp
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

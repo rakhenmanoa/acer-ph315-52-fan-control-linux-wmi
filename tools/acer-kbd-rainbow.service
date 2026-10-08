@@ -1,0 +1,11 @@
+[Unit]
+Description=Effet clavier Acer : arc-en-ciel
+After=systemd-modules-load.service
+
+[Service]
+ExecStart=/usr/local/bin/acer-kbd-rainbow
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

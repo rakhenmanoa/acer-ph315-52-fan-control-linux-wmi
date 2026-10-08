@@ -175,6 +175,37 @@ Choisissez l'effet dans `/etc/acer-kbd-effect.conf` (variable `EFFECT`). Il est 
 à chaque chargement du module, donc au démarrage. Pour l'appliquer tout de suite :
 `sudo systemctl start acer-kbd-effect`.
 
+## Effets logiciels
+
+Les LED par zone permettent des effets calculés par le processeur, en plus des
+effets matériels. Deux scripts sont fournis :
+
+```sh
+sudo tools/acer-kbd-rainbow              # arc-en-ciel qui défile sur les 4 zones
+sudo tools/acer-kbd-rainbow 3 0.05 90    # plus fluide, zones plus contrastées
+sudo tools/acer-kbd-temp                 # bleu (froid) -> vert -> orange -> rouge (chaud)
+```
+
+Arguments de `acer-kbd-rainbow` : `PAS INTERVALLE ÉCART LUMINOSITÉ` (défaut `6 0.1 40 255`).
+Arguments de `acer-kbd-temp` : `INTERVALLE LUMINOSITÉ` (défaut `2 255`).
+
+Pour lancer l'un d'eux au démarrage (un seul à la fois, et sans `acer-kbd-effect.service`) :
+
+```sh
+sudo install -m 755 tools/acer-kbd-temp /usr/local/bin/
+sudo install -m 644 tools/acer-kbd-temp.service /etc/systemd/system/
+sudo systemctl enable --now acer-kbd-temp
+```
+
+Les déclencheurs LED du noyau fonctionnent aussi sur chaque zone :
+
+```sh
+echo heartbeat | sudo tee /sys/class/leds/acer:rgb:kbd_zone-1/trigger
+```
+
+Limites : 4 zones seulement, et chaque changement de couleur est un appel au BIOS.
+Un effet logiciel consomme donc un peu plus qu'un effet matériel.
+
 ## Luminosité du clavier depuis le bureau
 
 Le module crée la LED standard `/sys/class/leds/acer::kbd_backlight` (0 à 100).

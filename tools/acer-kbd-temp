@@ -1,0 +1,63 @@
+#!/bin/sh
+# Effet logiciel : la couleur du clavier suit la température du processeur.
+#   <= 40 °C bleu, 60 °C vert, 75 °C orange, >= 90 °C rouge (dégradé entre les paliers)
+#
+# Usage : acer-kbd-temp [INTERVALLE] [LUMINOSITÉ]
+#   INTERVALLE secondes entre deux mesures (défaut 2)
+#   LUMINOSITÉ 0-255 (défaut 255)
+
+LEDS=${ACER_LEDS_DIR:-/sys/class/leds}
+DELAY=${1:-2}; BRIGHT=${2:-255}
+
+# Source de température : capteur CPU du module acer, sinon coretemp/k10temp,
+# sinon zone thermique x86_pkg_temp
+find_temp() {
+	[ -n "$ACER_TEMP_FILE" ] && { echo "$ACER_TEMP_FILE"; return; }
+	for name in acer coretemp k10temp; do
+		for h in /sys/class/hwmon/hwmon*; do
+			[ "$(cat "$h/name" 2>/dev/null)" = "$name" ] && [ -r "$h/temp1_input" ] &&
+				{ echo "$h/temp1_input"; return; }
+		done
+	done
+	for t in /sys/class/thermal/thermal_zone*; do
+		[ "$(cat "$t/type" 2>/dev/null)" = x86_pkg_temp ] && { echo "$t/temp"; return; }
+	done
+}
+
+TEMP=$(find_temp)
+[ -n "$TEMP" ] || { echo "Aucun capteur de température trouvé" >&2; exit 1; }
+
+for z in 1 2 3 4; do
+	[ -w "$LEDS/acer:rgb:kbd_zone-$z/multi_intensity" ] || {
+		echo "Zone $z introuvable ou non accessible (lancer avec sudo)" >&2; exit 1; }
+	echo "$BRIGHT" > "$LEDS/acer:rgb:kbd_zone-$z/brightness"
+done
+
+# Interpolation linéaire entre deux couleurs : lerp T T1 T2 R1 V1 B1 R2 V2 B2
+lerp() {
+	d=$(( $3 - $2 )); k=$(( $1 - $2 ))
+	echo "$(( $4 + ($7 - $4) * k / d )) $(( $5 + ($8 - $5) * k / d )) $(( $6 + ($9 - $6) * k / d ))"
+}
+
+# Température (°C) -> « R V B »
+temp_rgb() {
+	t=$1
+	if   [ "$t" -le 40 ]; then echo "0 80 255"
+	elif [ "$t" -le 60 ]; then lerp "$t" 40 60   0  80 255   0 255   0
+	elif [ "$t" -le 75 ]; then lerp "$t" 60 75   0 255   0 255 160   0
+	elif [ "$t" -lt 90 ]; then lerp "$t" 75 90 255 160   0 255   0   0
+	else echo "255 0 0"
+	fi
+}
+
+last=""
+while :; do
+	color=$(temp_rgb $(( $(cat "$TEMP") / 1000 )))
+	if [ "$color" != "$last" ]; then
+		for z in 1 2 3 4; do
+			echo "$color" > "$LEDS/acer:rgb:kbd_zone-$z/multi_intensity"
+		done
+		last=$color
+	fi
+	sleep "$DELAY"
+done
