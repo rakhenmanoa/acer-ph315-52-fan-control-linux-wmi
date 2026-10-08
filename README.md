@@ -123,20 +123,20 @@ make clean
 
 ## Option 2 : installation manuelle via DKMS
 
-C'est ce que fait `install.sh`. Remplacer `1.2.1` par le contenu du fichier `VERSION`.
+C'est ce que fait `install.sh`. Remplacer `1.3.0` par le contenu du fichier `VERSION`.
 
 ```sh
-sudo mkdir -p /usr/src/acer-ph315-52-fan-control-linux-wmi-1.2.1
-sudo cp acer-wmi.c Makefile VERSION dkms.conf /usr/src/acer-ph315-52-fan-control-linux-wmi-1.2.1/
-sudo dkms install acer-ph315-52-fan-control-linux-wmi/1.2.1
+sudo mkdir -p /usr/src/acer-ph315-52-fan-control-linux-wmi-1.3.0
+sudo cp acer-wmi.c Makefile VERSION dkms.conf /usr/src/acer-ph315-52-fan-control-linux-wmi-1.3.0/
+sudo dkms install acer-ph315-52-fan-control-linux-wmi/1.3.0
 sudo modprobe -r acer_wmi && sudo modprobe acer_wmi
 ```
 
 Désinstaller :
 
 ```sh
-sudo dkms remove acer-ph315-52-fan-control-linux-wmi/1.2.1 --all
-sudo rm -rf /usr/src/acer-ph315-52-fan-control-linux-wmi-1.2.1
+sudo dkms remove acer-ph315-52-fan-control-linux-wmi/1.3.0 --all
+sudo rm -rf /usr/src/acer-ph315-52-fan-control-linux-wmi-1.3.0
 ```
 
 ## Vérifier l'installation

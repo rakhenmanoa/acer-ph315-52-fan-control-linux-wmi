@@ -40,6 +40,7 @@
 #include <linux/cdev.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
+#include <linux/seq_file.h>
 #if IS_REACHABLE(CONFIG_LEDS_CLASS_MULTICOLOR)
 #include <linux/led-class-multicolor.h>
 #define ACER_HAVE_ZONE_LEDS 1
@@ -2198,6 +2199,62 @@ static acpi_status WMID_gaming_get_u64(u64 *value, u32 cap)
 	return status;
 }
 
+/*
+ * debugfs acer-gaming/led : outil de diagnostic des LED « gaming ».
+ *   lecture  : réponse brute de GetGamingLED (méthode 4) pour plusieurs groupes
+ *   écriture : valeur u64 envoyée telle quelle à SetGamingLED (méthode 2)
+ * Réservé à root ; n'agit que sur les LED (fonction 2 du BIOS).
+ */
+static struct dentry *acer_gaming_debugfs;
+
+static int acer_gaming_led_show(struct seq_file *m, void *unused)
+{
+	static const u32 groups[] = { 0x1, 0x2, 0x4, 0x8 };
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(groups); i++) {
+		u64 out = 0;
+		acpi_status st;
+
+		st = WMI_gaming_execute_u64(ACER_WMID_GET_GAMING_LED_METHODID, groups[i], &out);
+		seq_printf(m, "GetGamingLED(0x%x) : %s, réponse 0x%016llx\n", groups[i],
+			   ACPI_SUCCESS(st) ? "ok" : acpi_format_exception(st), out);
+	}
+	return 0;
+}
+
+static int acer_gaming_led_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, acer_gaming_led_show, NULL);
+}
+
+static ssize_t acer_gaming_led_write(struct file *file, const char __user *buf,
+				     size_t count, loff_t *ppos)
+{
+	acpi_status st;
+	u64 val, out = 0;
+	int err;
+
+	err = kstrtou64_from_user(buf, count, 0, &val);
+	if (err)
+		return err;
+
+	st = WMI_gaming_execute_u64(ACER_WMID_SET_GAMING_LED_METHODID, val, &out);
+	pr_info("SetGamingLED(0x%llx) : %s, réponse 0x%llx\n", val,
+		ACPI_SUCCESS(st) ? "ok" : acpi_format_exception(st), out);
+
+	return ACPI_SUCCESS(st) ? count : -EIO;
+}
+
+static const struct file_operations acer_gaming_led_fops = {
+	.owner = THIS_MODULE,
+	.open = acer_gaming_led_open,
+	.read = seq_read,
+	.write = acer_gaming_led_write,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
 static int WMID_gaming_get_sys_info(u32 command, u64 *out)
 {
 	acpi_status status;
@@ -3881,6 +3938,10 @@ static int __init acer_wmi_init(void)
 		err = acer_zone_leds_init(&acer_platform_device->dev);
 		if (err)
 			pr_warn("Impossible d'enregistrer les LED par zone (%d)\n", err);
+
+		acer_gaming_debugfs = debugfs_create_dir("acer-gaming", NULL);
+		debugfs_create_file("led", 0600, acer_gaming_debugfs, NULL,
+				    &acer_gaming_led_fops);
 	}
 
 	return 0;
@@ -3900,6 +3961,7 @@ error_platform_register:
 
 static void __exit acer_wmi_exit(void)
 {
+	debugfs_remove_recursive(acer_gaming_debugfs);
 	acer_zone_leds_exit();
 	if (gkbbl_led_inited)
 		led_classdev_unregister(&acer_kbd_led);
