@@ -143,12 +143,32 @@ Si le module figure dans l'initramfs, régénérez-le : `sudo mkinitcpio -P` (Ar
 
 ## Effets du clavier
 
-Avec `facer_rgb.py` du projet de Jafar Akhondali :
+Le script `tools/acer-kbd-effect` écrit directement dans le périphérique, sans Python :
 
 ```sh
-python3 facer_rgb.py -m 3 -s 5 -b 100           # vague
-python3 facer_rgb.py -m 1 -s 4 -b 100 -cR 255 -cB 255   # respiration violette
+tools/acer-kbd-effect 3 5 100                                   # vague
+tools/acer-kbd-effect 1 4 100 1 255 0 255                       # respiration violette
+tools/acer-kbd-effect static 80 1:255:0:0 2:0:255:0 3:0:0:255 4:255:255:255
 ```
+
+Modes : 1 respiration, 2 néon, 3 vague, 4 décalage, 5 zoom, 6 météore, 7 scintillement.
+Arguments : `MODE VITESSE(0-9) LUMINOSITE(0-100) DIRECTION(1-2) R V B`.
+
+Les outils `facer_rgb.py` et `keyboard.py` de Jafar Akhondali fonctionnent aussi.
+
+### Effet au démarrage
+
+```sh
+sudo install -m 755 tools/acer-kbd-effect /usr/local/bin/
+sudo install -m 644 tools/acer-kbd-effect.conf /etc/
+sudo install -m 644 tools/acer-kbd-effect.service /etc/systemd/system/
+sudo install -m 644 tools/99-acer-kbd-effect.rules /etc/udev/rules.d/
+sudo systemctl daemon-reload && sudo udevadm control --reload
+```
+
+Choisissez l'effet dans `/etc/acer-kbd-effect.conf` (variable `EFFECT`). Il est appliqué
+à chaque chargement du module, donc au démarrage. Pour l'appliquer tout de suite :
+`sudo systemctl start acer-kbd-effect`.
 
 ## Luminosité du clavier depuis le bureau
 

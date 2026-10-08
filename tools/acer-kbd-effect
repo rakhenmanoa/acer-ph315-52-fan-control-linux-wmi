@@ -1,0 +1,44 @@
+#!/bin/sh
+# Applique un effet au clavier RGB Acer, sans dépendance (pas de Python).
+#
+# Effet animé :
+#   acer-kbd-effect MODE [VITESSE] [LUMINOSITE] [DIRECTION] [R] [V] [B]
+#   MODE : 1 respiration, 2 néon, 3 vague, 4 décalage, 5 zoom, 6 météore, 7 scintillement
+#   VITESSE 0-9, LUMINOSITE 0-100, DIRECTION 1 = droite à gauche, 2 = gauche à droite
+#
+# Couleurs statiques par zone (zones 1 à 4, de gauche à droite) :
+#   acer-kbd-effect static LUMINOSITE ZONE:R:V:B [ZONE:R:V:B ...]
+#
+# Exemples :
+#   acer-kbd-effect 3 5 100                       # vague
+#   acer-kbd-effect 1 4 100 1 255 0 255           # respiration violette
+#   acer-kbd-effect static 80 1:255:0:0 2:0:255:0 3:0:0:255 4:255:255:255
+
+set -e
+DEV=${ACER_KBD_DEV:-/dev/acer-gkbbl-0}
+DEV_STATIC=${ACER_KBD_DEV_STATIC:-/dev/acer-gkbbl-static-0}
+
+# Écrit une suite d'octets (valeurs décimales) en un seul appel write()
+send() {
+	dev=$1; shift
+	len=$#
+	for v in "$@"; do printf "\\$(printf '%03o' "$v")"; done |
+		dd of="$dev" bs="$len" count=1 iflag=fullblock status=none
+}
+
+if [ "$1" = "static" ]; then
+	bright=${2:-100}; shift 2
+	for z in "$@"; do
+		IFS=: read -r zone r g b <<-END
+		$z
+		END
+		send "$DEV_STATIC" $((1 << (zone - 1))) "$r" "$g" "$b"
+	done
+	send "$DEV" 0 0 "$bright" 0 0 0 0 0 0 1 0 0 0 0 0 0
+	exit 0
+fi
+
+mode=${1:-3}; speed=${2:-4}; bright=${3:-100}; dir=${4:-1}
+r=${5:-50}; g=${6:-255}; b=${7:-50}
+[ "$mode" -eq 3 ] && wave=8 || wave=0
+send "$DEV" "$mode" "$speed" "$bright" "$wave" "$dir" "$r" "$g" "$b" 0 1 0 0 0 0 0 0

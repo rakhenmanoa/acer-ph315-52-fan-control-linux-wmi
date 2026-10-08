@@ -1,0 +1,7 @@
+[Unit]
+Description=Effet clavier RGB Acer
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/acer-kbd-effect.conf
+ExecStart=/usr/local/bin/acer-kbd-effect $EFFECT

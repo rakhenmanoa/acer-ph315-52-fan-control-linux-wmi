@@ -1,0 +1,2 @@
+# Lance acer-kbd-effect.service dès que le module crée /dev/acer-gkbbl-0
+SUBSYSTEM=="acer-gkbbl", KERNEL=="acer-gkbbl-0", TAG+="systemd", ENV{SYSTEMD_WANTS}+="acer-kbd-effect.service"
