@@ -151,7 +151,7 @@ tools/acer-kbd-effect 1 4 100 1 255 0 255                       # respiration vi
 tools/acer-kbd-effect static 80 1:255:0:0 2:0:255:0 3:0:0:255 4:255:255:255
 ```
 
-Modes : 1 respiration, 2 néon, 3 vague, 4 décalage, 5 zoom, 6 météore, 7 scintillement.
+Modes : 1 respiration, 2 néon, 3 vague, 4 décalage, 5 zoom.
 Arguments : `MODE VITESSE(0-9) LUMINOSITE(0-100) DIRECTION(1-2) R V B`.
 
 Les outils `facer_rgb.py` et `keyboard.py` de Jafar Akhondali fonctionnent aussi.

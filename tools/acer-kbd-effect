@@ -3,7 +3,7 @@
 #
 # Effet animé :
 #   acer-kbd-effect MODE [VITESSE] [LUMINOSITE] [DIRECTION] [R] [V] [B]
-#   MODE : 1 respiration, 2 néon, 3 vague, 4 décalage, 5 zoom, 6 météore, 7 scintillement
+#   MODE : 1 respiration, 2 néon, 3 vague, 4 décalage, 5 zoom
 #   VITESSE 0-9, LUMINOSITE 0-100, DIRECTION 1 = droite à gauche, 2 = gauche à droite
 #
 # Couleurs statiques par zone (zones 1 à 4, de gauche à droite) :
