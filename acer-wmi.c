@@ -40,7 +40,6 @@
 #include <linux/cdev.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
-#include <linux/seq_file.h>
 #if IS_REACHABLE(CONFIG_LEDS_CLASS_MULTICOLOR)
 #include <linux/led-class-multicolor.h>
 #define ACER_HAVE_ZONE_LEDS 1
@@ -218,7 +217,6 @@ static bool gkbbl_state_set;	/* une configuration a été envoyée depuis le cha
 #define GKBBL_NUM_ZONES		4
 static u8 gkbbl_zone_rgb[GKBBL_NUM_ZONES][3];
 static bool gkbbl_zone_set[GKBBL_NUM_ZONES];
-static struct dentry *gkbbl_debugfs;
 
 /* Prototypes indispensables pour l'enregistrement */
 static int acer_gkbbl_open(struct inode *inode, struct file *file);
@@ -426,11 +424,6 @@ static bool enable_platform_profile;
 module_param(enable_platform_profile, bool, 0444);
 MODULE_PARM_DESC(enable_platform_profile,
 	"Force the platform profile on models where it is disabled (PH315-52)");
-
-static bool kbd_fw_sync;
-module_param(kbd_fw_sync, bool, 0644);
-MODULE_PARM_DESC(kbd_fw_sync,
-	"Read keyboard backlight brightness back from the firmware (experimental)");
 
 struct acer_data {
 	int mailled;
@@ -1214,69 +1207,6 @@ unregister_region:
 }
 
 /*
- * Lit l'état du clavier renvoyé par le BIOS (méthode 21), octets bruts.
- * Le format n'est pas documenté : voir le fichier debugfs acer-gkbbl/fw_state.
- */
-static int acer_gkbbl_fw_read(u8 *out, size_t len, u32 *type)
-{
-	u32 in = 0;
-	struct acpi_buffer input = { sizeof(in), &in };
-	struct acpi_buffer output = { ACPI_ALLOCATE_BUFFER, NULL };
-	union acpi_object *obj;
-	acpi_status status;
-	int n = -ENOMSG;
-
-	status = wmi_evaluate_method(WMID_GUID4, 0, ACER_WMID_GET_GAMINGKBBL_METHODID,
-				     &input, &output);
-	if (ACPI_FAILURE(status))
-		return -EIO;
-
-	obj = output.pointer;
-	if (obj) {
-		*type = obj->type;
-		if (obj->type == ACPI_TYPE_BUFFER) {
-			n = min_t(size_t, obj->buffer.length, len);
-			memcpy(out, obj->buffer.pointer, n);
-		} else if (obj->type == ACPI_TYPE_INTEGER) {
-			u64 v = obj->integer.value;
-
-			n = min_t(size_t, sizeof(v), len);
-			memcpy(out, &v, n);
-		}
-	}
-	kfree(output.pointer);
-	return n;
-}
-
-/*
- * Avec kbd_fw_sync=1, reprend la luminosité indiquée par le BIOS
- * (octet 2, comme en écriture). Renvoie true si elle a changé.
- */
-static bool acer_gkbbl_fw_sync(void)
-{
-	u8 buf[GAMING_KBBL_CONFIG_LEN];
-	u32 type = 0;
-	bool changed = false;
-	int n;
-
-	if (!kbd_fw_sync)
-		return false;
-
-	n = acer_gkbbl_fw_read(buf, sizeof(buf), &type);
-	if (n <= GKBBL_BRIGHTNESS_IDX || buf[GKBBL_BRIGHTNESS_IDX] > GKBBL_MAX_BRIGHTNESS)
-		return false;
-
-	mutex_lock(&gkbbl_lock);
-	if (gkbbl_state[GKBBL_BRIGHTNESS_IDX] != buf[GKBBL_BRIGHTNESS_IDX]) {
-		gkbbl_state[GKBBL_BRIGHTNESS_IDX] = buf[GKBBL_BRIGHTNESS_IDX];
-		changed = true;
-	}
-	mutex_unlock(&gkbbl_lock);
-
-	return changed;
-}
-
-/*
  * LED « acer::kbd_backlight » : interface standard utilisée par UPower,
  * donc par le curseur de luminosité clavier de KDE et GNOME.
  * Seule la luminosité change ; mode, vitesse et couleurs sont conservés.
@@ -1298,7 +1228,6 @@ static int acer_kbd_led_set(struct led_classdev *cdev, enum led_brightness value
 
 static enum led_brightness acer_kbd_led_get(struct led_classdev *cdev)
 {
-	acer_gkbbl_fw_sync();
 	return gkbbl_state[GKBBL_BRIGHTNESS_IDX];
 }
 
@@ -1307,16 +1236,7 @@ static struct led_classdev acer_kbd_led = {
 	.max_brightness = GKBBL_MAX_BRIGHTNESS,
 	.brightness_set_blocking = acer_kbd_led_set,
 	.brightness_get = acer_kbd_led_get,
-	.flags = LED_BRIGHT_HW_CHANGED,
 };
-
-/* Appelé à chaque événement WMI : signale à UPower un changement fait par Fn */
-static void acer_kbd_led_fw_event(void)
-{
-	if (gkbbl_led_inited && acer_gkbbl_fw_sync())
-		led_classdev_notify_brightness_hw_changed(&acer_kbd_led,
-				gkbbl_state[GKBBL_BRIGHTNESS_IDX]);
-}
 
 #ifdef ACER_HAVE_ZONE_LEDS
 /*
@@ -1443,31 +1363,6 @@ static void acer_gkbbl_restore(void)
 				       gkbbl_state, GAMING_KBBL_CONFIG_LEN);
 	mutex_unlock(&gkbbl_lock);
 }
-
-/* debugfs acer-gkbbl/fw_state : réponse brute du BIOS et configuration en cache */
-static int acer_gkbbl_fw_state_show(struct seq_file *m, void *unused)
-{
-	u8 buf[32];
-	u32 type = 0;
-	int n, i;
-
-	n = acer_gkbbl_fw_read(buf, sizeof(buf), &type);
-	if (n < 0) {
-		seq_printf(m, "BIOS : erreur %d\n", n);
-	} else {
-		seq_printf(m, "BIOS : type %u, %d octets :", type, n);
-		for (i = 0; i < n; i++)
-			seq_printf(m, " %02x", buf[i]);
-		seq_putc(m, '\n');
-	}
-
-	seq_puts(m, "cache :");
-	for (i = 0; i < GAMING_KBBL_CONFIG_LEN; i++)
-		seq_printf(m, " %02x", gkbbl_state[i]);
-	seq_putc(m, '\n');
-	return 0;
-}
-DEFINE_SHOW_ATTRIBUTE(acer_gkbbl_fw_state);
 
 static void acer_gkbbl_exit(void)
 {
@@ -3087,9 +2982,6 @@ static void acer_wmi_notify(union acpi_object *obj, void *context)
 
 	return_value = *((struct event_return_value *)obj->buffer.pointer);
 
-	/* Les touches Fn de rétroéclairage peuvent avoir changé la luminosité */
-	acer_kbd_led_fw_event();
-
 	switch (return_value.function) {
 	case WMID_HOTKEY_EVENT:
 		device_state = return_value.device_state;
@@ -3887,10 +3779,6 @@ static int __init acer_wmi_init(void)
 		err = acer_zone_leds_init(&acer_platform_device->dev);
 		if (err)
 			pr_warn("Impossible d'enregistrer les LED par zone (%d)\n", err);
-
-		gkbbl_debugfs = debugfs_create_dir("acer-gkbbl", NULL);
-		debugfs_create_file("fw_state", 0400, gkbbl_debugfs, NULL,
-				    &acer_gkbbl_fw_state_fops);
 	}
 
 	return 0;
@@ -3910,7 +3798,6 @@ error_platform_register:
 
 static void __exit acer_wmi_exit(void)
 {
-	debugfs_remove_recursive(gkbbl_debugfs);
 	acer_zone_leds_exit();
 	if (gkbbl_led_inited)
 		led_classdev_unregister(&acer_kbd_led);

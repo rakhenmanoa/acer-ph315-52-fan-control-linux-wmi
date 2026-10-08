@@ -191,9 +191,6 @@ echo 30 | sudo tee /sys/class/leds/acer::kbd_backlight/brightness
 Après le chargement du module, redémarrez UPower pour que KDE voie la LED :
 `sudo systemctl restart upower`.
 
-Les changements faits avec les touches Fn sont gérés par le firmware et ne
-remontent pas au curseur.
-
 ## Couleur par zone (LED multicolores)
 
 Chaque zone du clavier (1 à 4, de gauche à droite) est une LED multicolore standard :
@@ -208,22 +205,6 @@ Régler une zone passe le clavier en mode statique. La luminosité générale
 reste celle de `acer::kbd_backlight`.
 
 Ces LED nécessitent `CONFIG_LEDS_CLASS_MULTICOLOR` (activé dans les noyaux Manjaro et Arch).
-
-## Synchronisation avec les touches Fn (expérimental)
-
-Par défaut, le curseur de KDE ne voit pas les changements faits avec Fn.
-Le paramètre `kbd_fw_sync` relit la luminosité auprès du BIOS :
-
-```sh
-echo 1 | sudo tee /sys/module/acer_wmi/parameters/kbd_fw_sync
-```
-
-Le format de la réponse du BIOS n'est pas encore vérifié sur le PH315-52.
-Pour l'examiner, changez la luminosité avec Fn puis lisez :
-
-```sh
-sudo cat /sys/kernel/debug/acer-gkbbl/fw_state
-```
 
 ## Contrôle des ventilateurs
 
