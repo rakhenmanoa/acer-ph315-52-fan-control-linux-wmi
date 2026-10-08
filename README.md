@@ -184,10 +184,14 @@ effets matériels. Deux scripts sont fournis :
 sudo tools/acer-kbd-rainbow              # arc-en-ciel qui défile sur les 4 zones
 sudo tools/acer-kbd-rainbow 3 0.05 90    # plus fluide, zones plus contrastées
 sudo tools/acer-kbd-temp                 # bleu (froid) -> vert -> orange -> rouge (chaud)
+sudo tools/acer-kbd-heartbeat            # battement de cœur rouge, 60 par minute
+sudo tools/acer-kbd-heartbeat auto 255 0 0 centre   # accélère avec la charge, part du centre
 ```
 
 Arguments de `acer-kbd-rainbow` : `PAS INTERVALLE ÉCART LUMINOSITÉ` (défaut `6 0.1 40 255`).
 Arguments de `acer-kbd-temp` : `INTERVALLE LUMINOSITÉ` (défaut `2 255`).
+Arguments de `acer-kbd-heartbeat` : `RYTHME R V B PROPAGATION` (défaut `60 255 0 0 tout`) ;
+`RYTHME` en battements par minute ou `auto`, `PROPAGATION` = `tout` ou `centre`.
 
 Pour lancer l'un d'eux au démarrage (un seul à la fois, et sans `acer-kbd-effect.service`) :
 

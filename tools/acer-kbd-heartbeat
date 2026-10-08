@@ -1,0 +1,66 @@
+#!/bin/sh
+# Effet logiciel : battement de cœur (double pulsation « boum-boum »).
+#
+# Usage : acer-kbd-heartbeat [RYTHME] [R V B] [PROPAGATION]
+#   RYTHME      battements par minute, ou « auto » : suit la charge du processeur
+#               (60 au repos, jusqu'à 160 en pleine charge). Défaut : 60
+#   R V B       couleur (défaut 255 0 0, rouge)
+#   PROPAGATION « centre » : le battement part du centre du clavier vers les bords
+#               « tout » : les 4 zones battent ensemble (défaut)
+#
+# Exemples :
+#   acer-kbd-heartbeat
+#   acer-kbd-heartbeat auto
+#   acer-kbd-heartbeat 72 255 0 128 centre
+
+LEDS=${ACER_LEDS_DIR:-/sys/class/leds}
+RATE=${1:-60}; R=${2:-255}; G=${3:-0}; B=${4:-0}; SPREAD=${5:-tout}
+FRAME_MS=40
+
+for z in 1 2 3 4; do
+	[ -w "$LEDS/acer:rgb:kbd_zone-$z/multi_intensity" ] || {
+		echo "Zone $z introuvable ou non accessible (lancer avec sudo)" >&2; exit 1; }
+	echo 255 > "$LEDS/acer:rgb:kbd_zone-$z/brightness"
+done
+
+# Intensité (%) de chaque image d'un battement : premier coup fort, second plus faible
+PULSE="8 45 100 70 35 12 4 4 30 70 45 20 8 4"
+NFRAMES=14
+
+# Couleur à P % d'intensité
+color() { echo "$(( R * $1 / 100 )) $(( G * $1 / 100 )) $(( B * $1 / 100 ))"; }
+
+set_zones() {	# set_zones INTENSITÉ_BORDS INTENSITÉ_CENTRE
+	c_out=$(color "$1"); c_in=$(color "$2")
+	echo "$c_out" > "$LEDS/acer:rgb:kbd_zone-1/multi_intensity"
+	echo "$c_in"  > "$LEDS/acer:rgb:kbd_zone-2/multi_intensity"
+	echo "$c_in"  > "$LEDS/acer:rgb:kbd_zone-3/multi_intensity"
+	echo "$c_out" > "$LEDS/acer:rgb:kbd_zone-4/multi_intensity"
+}
+
+# Battements par minute selon la charge moyenne sur 1 minute et le nombre de cœurs
+auto_bpm() {
+	read -r l _ < /proc/loadavg
+	i=${l%.*}; f=${l#*.}; f=$(echo "${f}00" | cut -c1-2)
+	load100=$(( i * 100 + ${f#0} ))
+	cpus=$(nproc 2>/dev/null || echo 1)
+	bpm=$(( 60 + 100 * load100 / (cpus * 100) ))
+	[ "$bpm" -gt 160 ] && bpm=160
+	echo "$bpm"
+}
+
+sec() { printf '%d.%03d' $(( $1 / 1000 )) $(( $1 % 1000 )); }
+
+while :; do
+	[ "$RATE" = auto ] && bpm=$(auto_bpm) || bpm=$RATE
+	prev=0
+	for p in $PULSE; do
+		if [ "$SPREAD" = centre ]; then set_zones "$prev" "$p"; else set_zones "$p" "$p"; fi
+		prev=$p
+		sleep "$(sec $FRAME_MS)"
+	done
+	set_zones 0 0
+	# Repos jusqu'au battement suivant
+	rest=$(( 60000 / bpm - NFRAMES * FRAME_MS ))
+	[ "$rest" -gt 0 ] && sleep "$(sec $rest)"
+done

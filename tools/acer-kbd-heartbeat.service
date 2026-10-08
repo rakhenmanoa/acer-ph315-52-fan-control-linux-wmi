@@ -1,0 +1,11 @@
+[Unit]
+Description=Effet clavier Acer : battement de cœur
+After=systemd-modules-load.service
+
+[Service]
+ExecStart=/usr/local/bin/acer-kbd-heartbeat auto 255 0 0 centre
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
