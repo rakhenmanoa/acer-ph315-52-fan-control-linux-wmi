@@ -4,8 +4,13 @@ Version modifiée du pilote noyau `acer-wmi` pour l'Acer Predator Helios 300 (PH
 
 Ajouts par rapport au pilote d'origine :
 
-- `/dev/acer-gkbbl` : effets de rétroéclairage du clavier (tampon de 16 octets)
-- `/dev/acer-gkbbl-static` : couleur statique du clavier (tampon de 4 octets)
+- `/dev/acer-gkbbl-0` : effets de rétroéclairage du clavier (tampon de 16 octets)
+- `/dev/acer-gkbbl-static-0` : couleur statique du clavier (tampon de 4 octets)
+- Activation des 4 zones du clavier au chargement, et fichiers accessibles sans `sudo`
+
+Les noms des périphériques sont les mêmes que dans le module de Jafar Akhondali :
+ses outils `facer_rgb.py` et `keyboard.py` fonctionnent tels quels.
+
 - LED `acer::kbd_backlight` : luminosité du clavier réglable depuis le curseur de KDE ou GNOME (via UPower)
 - Quirks PH315-52 : mode turbo, ventilateurs CPU/GPU, capteurs hwmon et contrôle PWM
 
@@ -136,12 +141,21 @@ Si `modinfo` pointe vers `kernel/drivers/platform/x86/`, c'est encore le pilote 
 
 Si le module figure dans l'initramfs, régénérez-le : `sudo mkinitcpio -P` (Arch) ou `sudo update-initramfs -u` (Debian).
 
+## Effets du clavier
+
+Avec `facer_rgb.py` du projet de Jafar Akhondali :
+
+```sh
+python3 facer_rgb.py -m 3 -s 5 -b 100           # vague
+python3 facer_rgb.py -m 1 -s 4 -b 100 -cR 255 -cB 255   # respiration violette
+```
+
 ## Luminosité du clavier depuis le bureau
 
 Le module crée la LED standard `/sys/class/leds/acer::kbd_backlight` (0 à 100).
 UPower la détecte, et le curseur de luminosité clavier de KDE ou GNOME l'utilise.
 Seule la luminosité change : le mode, la vitesse et les couleurs restent ceux
-du dernier réglage envoyé via `/dev/acer-gkbbl`.
+du dernier réglage envoyé via `/dev/acer-gkbbl-0`.
 
 Test manuel :
 

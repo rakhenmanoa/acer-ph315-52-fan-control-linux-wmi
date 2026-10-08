@@ -1085,6 +1085,26 @@ static ssize_t acer_gkbbl_write(struct file *file, const char __user *buf, size_
 	return count;
 }
 
+static acpi_status WMI_gaming_execute_u64(u32 method_id, u64 in, u64 *out);
+
+/* Accès en lecture/écriture pour tous, comme le module de Jafar Akhondali */
+static int acer_gkbbl_uevent(const struct device *dev, struct kobj_uevent_env *env)
+{
+	return add_uevent_var(env, "DEVMODE=%#o", 0666);
+}
+
+/*
+ * Active les 4 zones du clavier RGB. Sans ces appels, certains firmwares
+ * (Predator / Nitro à 4 zones) n'appliquent pas tous les effets.
+ */
+static void __init acer_gkbbl_enable_zones(void)
+{
+	u64 gaming_sysinfo;
+
+	WMI_gaming_execute_u64(ACER_WMID_GET_GAMING_SYS_INFO_METHODID, 0, &gaming_sysinfo);
+	WMI_gaming_execute_u64(ACER_WMID_SET_GAMING_LED_METHODID, 8ULL | (15ULL << 40), NULL);
+}
+
 static int __init acer_gkbbl_init(void)
 {
 	int err;
@@ -1102,8 +1122,9 @@ static int __init acer_gkbbl_init(void)
 		err = PTR_ERR(gkbbl_class);
 		goto unregister_region;
 	}
+	gkbbl_class->dev_uevent = acer_gkbbl_uevent;
 
-	/* 3. Configuration du premier périphérique : /dev/acer-gkbbl */
+	/* 3. Configuration du premier périphérique : /dev/acer-gkbbl-0 */
 	gkbbl_normal_dev.is_static = false;
 	cdev_init(&gkbbl_normal_dev.cdev, &acer_gkbbl_fops);
 	gkbbl_normal_dev.cdev.owner = THIS_MODULE;
@@ -1112,13 +1133,13 @@ static int __init acer_gkbbl_init(void)
 		goto destroy_class;
 
 	gkbbl_normal_dev.device = device_create(gkbbl_class, NULL, gkbbl_dev_num,
-											NULL, GAMING_KBBL_CHR);
+											NULL, "%s-0", GAMING_KBBL_CHR);
 	if (IS_ERR(gkbbl_normal_dev.device)) {
 		err = PTR_ERR(gkbbl_normal_dev.device);
 		goto del_normal_cdev;
 	}
 
-	/* 4. Configuration du second périphérique : /dev/acer-gkbbl-static */
+	/* 4. Configuration du second périphérique : /dev/acer-gkbbl-static-0 */
 	gkbbl_static_dev.is_static = true;
 	cdev_init(&gkbbl_static_dev.cdev, &acer_gkbbl_fops);
 	gkbbl_static_dev.cdev.owner = THIS_MODULE;
@@ -1127,13 +1148,15 @@ static int __init acer_gkbbl_init(void)
 		goto destroy_normal_device;
 
 	gkbbl_static_dev.device = device_create(gkbbl_class, NULL, MKDEV(MAJOR(gkbbl_dev_num), 1),
-											NULL, GAMING_KBBL_STATIC_CHR);
+											NULL, "%s-0", GAMING_KBBL_STATIC_CHR);
 	if (IS_ERR(gkbbl_static_dev.device)) {
 		err = PTR_ERR(gkbbl_static_dev.device);
 		goto del_static_cdev;
 	}
 
-	pr_info("Interfaces /dev/acer-gkbbl et /dev/acer-gkbbl-static initialisées.\n");
+	pr_info("Interfaces /dev/acer-gkbbl-0 et /dev/acer-gkbbl-static-0 initialisées.\n");
+
+	acer_gkbbl_enable_zones();
 	return 0;
 
 del_static_cdev:
