@@ -22,6 +22,7 @@ DEV_STATIC=${ACER_KBD_DEV_STATIC:-/dev/acer-gkbbl-static-0}
 send() {
 	dev=$1; shift
 	len=$#
+	# shellcheck disable=SC2059  # format construit volontairement (octet en octal)
 	for v in "$@"; do printf "\\$(printf '%03o' "$v")"; done |
 		dd of="$dev" bs="$len" count=1 iflag=fullblock status=none
 }

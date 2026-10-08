@@ -1,0 +1,42 @@
+name: Compilation
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"   # chaque lundi : détecte les nouveaux noyaux qui cassent le module
+  workflow_dispatch:
+
+jobs:
+  module:
+    name: Module (${{ matrix.kernel }})
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: [linux, linux-lts]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dépendances
+        run: pacman -Syu --noconfirm --needed base-devel ${{ matrix.kernel }}-headers
+
+      - name: Compilation
+        run: |
+          KDIR=$(ls -d /usr/lib/modules/*/build | head -n1)
+          echo "Noyau : $KDIR"
+          make KDIR="$KDIR" W=1
+
+      - name: Vérifications
+        run: |
+          test -f acer-wmi.ko
+          modinfo -F version acer-wmi.ko | grep -qx "$(cat VERSION)"
+          grep -q "^PACKAGE_VERSION=\"$(cat VERSION)\"" dkms.conf
+
+  scripts:
+    name: Scripts (shellcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck -s sh install.sh uninstall.sh tools/acer-kbd-effect tools/acer-kbd-rainbow tools/acer-kbd-temp tools/acer-kbd-heartbeat

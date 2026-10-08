@@ -1,25 +1,51 @@
 # Acer PH315-52 fan control (Linux WMI)
 
+[![Compilation](https://github.com/rakhenmanoa/acer-ph315-52-fan-control-linux-wmi/actions/workflows/build.yml/badge.svg)](https://github.com/rakhenmanoa/acer-ph315-52-fan-control-linux-wmi/actions/workflows/build.yml)
+
 Version modifiée du pilote noyau `acer-wmi` pour l'Acer Predator Helios 300 (PH315-52).
 
 Ajouts par rapport au pilote d'origine :
 
+- Quirks PH315-52 : mode turbo, ventilateurs CPU/GPU, capteurs hwmon et contrôle PWM
 - `/dev/acer-gkbbl-0` : effets de rétroéclairage du clavier (tampon de 16 octets)
 - `/dev/acer-gkbbl-static-0` : couleur statique du clavier (tampon de 4 octets)
 - Activation des 4 zones du clavier au chargement, et fichiers accessibles sans `sudo`
-
-Les noms des périphériques sont les mêmes que dans le module de Jafar Akhondali :
-ses outils `facer_rgb.py` et `keyboard.py` fonctionnent tels quels.
-
 - LED `acer::kbd_backlight` : luminosité du clavier réglable depuis le curseur de KDE ou GNOME (via UPower)
 - LED `acer:rgb:kbd_zone-1` à `-4` : couleur de chaque zone via l'interface LED multicolore standard
 - Restauration de l'effet et des couleurs après une mise en veille
-- Quirks PH315-52 : mode turbo, ventilateurs CPU/GPU, capteurs hwmon et contrôle PWM
+
+Les noms des périphériques sont les mêmes que dans le module de Jafar Akhondali :
+ses outils `facer_rgb.py` et `keyboard.py` fonctionnent tels quels.
 
 Le profil énergétique (*platform profile*) Predator v4 est désactivé sur le PH315-52 :
 il entre en conflit avec la gestion d'énergie de KDE, qui fonctionne mieux sans lui.
 Pour le réactiver à titre de test : `options acer_wmi enable_platform_profile=1`
 dans `/etc/modprobe.d/acer-wmi.conf`.
+
+## Installation rapide
+
+```sh
+sudo pacman -S dkms linux71-headers   # adapter "linux71" à votre noyau (uname -r)
+git clone https://github.com/rakhenmanoa/acer-ph315-52-fan-control-linux-wmi
+cd acer-ph315-52-fan-control-linux-wmi
+sudo ./install.sh            # ou : sudo ./install.sh --tools  (scripts d'effets en plus)
+```
+
+`install.sh` supprime les installations précédentes (y compris sous d'anciens noms
+comme `acer-wmi-gkbbl`), compile et installe le module via DKMS, puis le recharge.
+DKMS le recompile ensuite automatiquement à chaque mise à jour du noyau.
+
+**Mettre à jour :**
+
+```sh
+git pull && sudo ./install.sh
+```
+
+**Désinstaller :** `sudo ./uninstall.sh` (ajouter `--tools` pour retirer aussi les scripts).
+
+**Version installée :** `modinfo -F version acer_wmi` (doit correspondre au fichier `VERSION`).
+
+Les sections suivantes détaillent les étapes manuelles, utiles pour le développement.
 
 ## Prérequis
 
@@ -28,14 +54,14 @@ Les outils de compilation et les en-têtes du noyau en cours d'exécution.
 Manjaro / Arch :
 
 ```sh
-uname -r                                  # ex. 7.1.13-2-MANJARO
-sudo pacman -S base-devel linux71-headers  # adapter "linux71" à votre noyau
+uname -r                                        # ex. 7.1.13-2-MANJARO
+sudo pacman -S base-devel dkms linux71-headers  # adapter "linux71" à votre noyau
 ```
 
 Debian / Ubuntu :
 
 ```sh
-sudo apt install build-essential linux-headers-$(uname -r)
+sudo apt install build-essential dkms linux-headers-$(uname -r)
 ```
 
 Récupérer les sources :
@@ -94,43 +120,22 @@ Le module se charge ensuite automatiquement au démarrage, tant que le noyau ne 
 make clean
 ```
 
-## Option 2 : installation via DKMS (recommandée)
+## Option 2 : installation manuelle via DKMS
 
-DKMS recompile et réinstalle le module automatiquement à chaque mise à jour du noyau.
-
-### Installer DKMS
+C'est ce que fait `install.sh`. Remplacer `1.1.0` par le contenu du fichier `VERSION`.
 
 ```sh
-sudo pacman -S dkms          # Manjaro / Arch
-sudo apt install dkms        # Debian / Ubuntu
-```
-
-### Installer le module
-
-Depuis le dossier du dépôt :
-
-```sh
-sudo mkdir -p /usr/src/acer-ph315-52-fan-control-linux-wmi-1.0
-sudo cp acer-wmi.c Makefile dkms.conf /usr/src/acer-ph315-52-fan-control-linux-wmi-1.0/
-sudo dkms install acer-ph315-52-fan-control-linux-wmi/1.0
+sudo mkdir -p /usr/src/acer-ph315-52-fan-control-linux-wmi-1.1.0
+sudo cp acer-wmi.c Makefile VERSION dkms.conf /usr/src/acer-ph315-52-fan-control-linux-wmi-1.1.0/
+sudo dkms install acer-ph315-52-fan-control-linux-wmi/1.1.0
 sudo modprobe -r acer_wmi && sudo modprobe acer_wmi
 ```
 
-### Mettre à jour après une modification du source
+Désinstaller :
 
 ```sh
-sudo dkms remove acer-ph315-52-fan-control-linux-wmi/1.0 --all
-sudo cp acer-wmi.c Makefile dkms.conf /usr/src/acer-ph315-52-fan-control-linux-wmi-1.0/
-sudo dkms install acer-ph315-52-fan-control-linux-wmi/1.0
-sudo modprobe -r acer_wmi && sudo modprobe acer_wmi
-```
-
-### Désinstaller
-
-```sh
-sudo dkms remove acer-ph315-52-fan-control-linux-wmi/1.0 --all
-sudo rm -rf /usr/src/acer-ph315-52-fan-control-linux-wmi-1.0
-sudo modprobe -r acer_wmi && sudo modprobe acer_wmi   # recharge le pilote d'origine
+sudo dkms remove acer-ph315-52-fan-control-linux-wmi/1.1.0 --all
+sudo rm -rf /usr/src/acer-ph315-52-fan-control-linux-wmi-1.1.0
 ```
 
 ## Vérifier l'installation

@@ -49,6 +49,11 @@ MODULE_AUTHOR("Carlos Corbacho");
 MODULE_DESCRIPTION("Acer Laptop WMI Extras Driver");
 MODULE_LICENSE("GPL");
 
+#ifndef ACER_PH315_VERSION
+#define ACER_PH315_VERSION "dev"
+#endif
+MODULE_VERSION(ACER_PH315_VERSION);
+
 /*
  * Magic Number
  * Meaning is unknown - this number is required for writing to ACPI for AMW0
