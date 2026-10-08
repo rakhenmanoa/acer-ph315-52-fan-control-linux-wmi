@@ -192,6 +192,22 @@ static struct acer_gkbbl_dev gkbbl_normal_dev;
 static struct acer_gkbbl_dev gkbbl_static_dev;
 static bool gkbbl_inited;
 
+/*
+ * Dernière configuration envoyée au BIOS (16 octets).
+ * Octet 0 : mode, 1 : vitesse, 2 : luminosité (0-100), 9 : doit valoir 1.
+ * Par défaut : mode statique, luminosité maximale (les couleurs des zones
+ * sont conservées par le firmware).
+ */
+#define GKBBL_BRIGHTNESS_IDX	2
+#define GKBBL_APPLY_IDX		9
+#define GKBBL_MAX_BRIGHTNESS	100
+static u8 gkbbl_state[GAMING_KBBL_CONFIG_LEN] = {
+	[GKBBL_BRIGHTNESS_IDX] = GKBBL_MAX_BRIGHTNESS,
+	[GKBBL_APPLY_IDX] = 1,
+};
+static DEFINE_MUTEX(gkbbl_lock);
+static bool gkbbl_led_inited;
+
 /* Prototypes indispensables pour l'enregistrement */
 static int acer_gkbbl_open(struct inode *inode, struct file *file);
 static ssize_t acer_gkbbl_read(struct file *file, char __user *buf, size_t count, loff_t *pos);
@@ -1047,11 +1063,21 @@ static ssize_t acer_gkbbl_write(struct file *file, const char __user *buf, size_
 	if (copy_from_user(kernel_buf, buf, count))
 		return -EFAULT;
 
+	mutex_lock(&gkbbl_lock);
+
 	/* Le BIOS attend le tampon complet : 16 octets (effets) ou 4 octets (statique) */
 	status = WMI_gaming_execute_buf(dev->is_static ?
 					ACER_WMID_SET_GAMING_STATIC_LED_METHODID :
 					ACER_WMID_SET_GAMINGKBBL_METHODID,
 					kernel_buf, config_len);
+
+	/* Mémorise la configuration pour que la LED kbd_backlight la réutilise */
+	if (ACPI_SUCCESS(status) && !dev->is_static) {
+		memcpy(gkbbl_state, kernel_buf, GAMING_KBBL_CONFIG_LEN);
+		gkbbl_state[GKBBL_APPLY_IDX] = 1;
+	}
+
+	mutex_unlock(&gkbbl_lock);
 
 	if (ACPI_FAILURE(status))
 		return -EIO;
@@ -1122,6 +1148,37 @@ unregister_region:
 	unregister_chrdev_region(gkbbl_dev_num, 2);
 	return err;
 }
+
+/*
+ * LED « acer::kbd_backlight » : interface standard utilisée par UPower,
+ * donc par le curseur de luminosité clavier de KDE et GNOME.
+ * Seule la luminosité change ; mode, vitesse et couleurs sont conservés.
+ */
+static int acer_kbd_led_set(struct led_classdev *cdev, enum led_brightness value)
+{
+	acpi_status status;
+
+	mutex_lock(&gkbbl_lock);
+	gkbbl_state[GKBBL_BRIGHTNESS_IDX] = value;
+	gkbbl_state[GKBBL_APPLY_IDX] = 1;
+	status = WMI_gaming_execute_buf(ACER_WMID_SET_GAMINGKBBL_METHODID,
+					gkbbl_state, GAMING_KBBL_CONFIG_LEN);
+	mutex_unlock(&gkbbl_lock);
+
+	return ACPI_FAILURE(status) ? -EIO : 0;
+}
+
+static enum led_brightness acer_kbd_led_get(struct led_classdev *cdev)
+{
+	return gkbbl_state[GKBBL_BRIGHTNESS_IDX];
+}
+
+static struct led_classdev acer_kbd_led = {
+	.name = "acer::kbd_backlight",
+	.max_brightness = GKBBL_MAX_BRIGHTNESS,
+	.brightness_set_blocking = acer_kbd_led_set,
+	.brightness_get = acer_kbd_led_get,
+};
 
 static void acer_gkbbl_exit(void)
 {
@@ -3519,6 +3576,13 @@ static int __init acer_wmi_init(void)
 			pr_warn("Impossible de créer les nœuds de périphérique de caractères de rétroéclairage\n");
 		else
 			gkbbl_inited = true;
+
+		/* LED standard pour le curseur de luminosité clavier du bureau */
+		err = led_classdev_register(&acer_platform_device->dev, &acer_kbd_led);
+		if (err)
+			pr_warn("Impossible d'enregistrer la LED kbd_backlight (%d)\n", err);
+		else
+			gkbbl_led_inited = true;
 	}
 
 	return 0;
@@ -3538,6 +3602,9 @@ error_platform_register:
 
 static void __exit acer_wmi_exit(void)
 {
+	if (gkbbl_led_inited)
+		led_classdev_unregister(&acer_kbd_led);
+
 	if (gkbbl_inited)
 		acer_gkbbl_exit();
 

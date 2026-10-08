@@ -6,6 +6,7 @@ Ajouts par rapport au pilote d'origine :
 
 - `/dev/acer-gkbbl` : effets de rétroéclairage du clavier (tampon de 16 octets)
 - `/dev/acer-gkbbl-static` : couleur statique du clavier (tampon de 4 octets)
+- LED `acer::kbd_backlight` : luminosité du clavier réglable depuis le curseur de KDE ou GNOME (via UPower)
 - Quirks PH315-52 : mode turbo, ventilateurs CPU/GPU, capteurs hwmon et contrôle PWM
 
 L'enregistrement du *platform profile* est désactivé dans cette version.
@@ -134,6 +135,25 @@ sensors | grep -A5 acer      # températures et vitesses des ventilateurs
 Si `modinfo` pointe vers `kernel/drivers/platform/x86/`, c'est encore le pilote d'origine qui est utilisé. Lancez `sudo depmod -a` puis rechargez le module.
 
 Si le module figure dans l'initramfs, régénérez-le : `sudo mkinitcpio -P` (Arch) ou `sudo update-initramfs -u` (Debian).
+
+## Luminosité du clavier depuis le bureau
+
+Le module crée la LED standard `/sys/class/leds/acer::kbd_backlight` (0 à 100).
+UPower la détecte, et le curseur de luminosité clavier de KDE ou GNOME l'utilise.
+Seule la luminosité change : le mode, la vitesse et les couleurs restent ceux
+du dernier réglage envoyé via `/dev/acer-gkbbl`.
+
+Test manuel :
+
+```sh
+echo 30 | sudo tee /sys/class/leds/acer::kbd_backlight/brightness
+```
+
+Après le chargement du module, redémarrez UPower pour que KDE voie la LED :
+`sudo systemctl restart upower`.
+
+Les changements faits avec les touches Fn sont gérés par le firmware et ne
+remontent pas au curseur.
 
 ## Contrôle des ventilateurs
 
